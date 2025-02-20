@@ -10,14 +10,28 @@ def load_user_data():
         with open(USER_DATA_FILE, 'r') as file:
             return json.load(file)
     else:
-        return {'ADMIN': {'password': '', 'blocked': False, 'password_restrictions': False}}
+        return {'ADMIN': {'password': '', 'blocked': False, 'password_restrictions': None}}
 
 def save_user_data(data):
     with open(USER_DATA_FILE, 'w') as file:
-        json.dump(data, file)
+        json.dump(data, file, indent=4)
 
-def validate_password(password):
-    return len(password) >= 8
+def validate_password(password, restrictions):
+    if restrictions:
+        min_length = restrictions.get('min_length', 0)
+        if min_length is None:
+            min_length = 0
+        if 'min_length' in restrictions and len(password) < min_length:
+            return False, f"Пароль должен быть не менее {min_length} символов."
+        if 'uppercase' in restrictions and restrictions['uppercase'] and not any(c.isupper() for c in password):
+            return False, "Пароль должен содержать хотя бы одну заглавную букву."
+        if 'lowercase' in restrictions and restrictions['lowercase'] and not any(c.islower() for c in password):
+            return False, "Пароль должен содержать хотя бы одну строчную букву."
+        if 'digits' in restrictions and restrictions['digits'] and not any(c.isdigit() for c in password):
+            return False, "Пароль должен содержать хотя бы одну цифру."
+        if 'special_chars' in restrictions and restrictions['special_chars'] and not any(c in r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~""" for c in password):
+            return False, "Пароль должен содержать хотя бы один специальный символ."
+    return True, "Пароль соответствует требованиям."
 
 class LoginApp:
     def __init__(self, root):
@@ -25,6 +39,7 @@ class LoginApp:
         self.root.title("Вход в систему")
         self.root.geometry("300x250")
         self.user_data = load_user_data()
+        self.attempts = 0
 
         self.username_label = tk.Label(root, text="Имя пользователя:")
         self.username_label.pack()
@@ -52,17 +67,22 @@ class LoginApp:
             return
 
         if self.user_data[username]['password'] != password:
-            messagebox.showerror("Ошибка", "Неверный пароль")
+            self.attempts += 1
+            if self.attempts >= 3:
+                messagebox.showerror("Ошибка", "Превышено количество попыток")
+                self.root.quit()
+            else:
+                messagebox.showerror("Ошибка", f"Неверный пароль. Осталось попыток: {3 - self.attempts}")
             return
 
         self.root.destroy()
         if username == 'ADMIN':
             admin_root = tk.Tk()
-            admin_root.geometry("300x220")
+            admin_root.geometry("400x300")
             AdminApp(admin_root, self.user_data)
         else:
             user_root = tk.Tk()
-            user_root.geometry("400x200")
+            user_root.geometry("200x100")
             UserApp(user_root, username, self.user_data)
 
 class AdminApp:
@@ -86,10 +106,13 @@ class AdminApp:
         self.unblock_user_button = tk.Button(root, text="Разблокировать пользователя", command=self.unblock_user)
         self.unblock_user_button.pack()
 
-        self.toggle_restrictions_button = tk.Button(root, text="Включить/отключить ограничения на пароли", command=self.toggle_restrictions)
-        self.toggle_restrictions_button.pack()
+        self.set_restrictions_button = tk.Button(root, text="Задать ограничения на пароль", command=self.set_restrictions)
+        self.set_restrictions_button.pack()
 
-        self.exit_button = tk.Button(root, text="Завершить работу", command=root.quit)
+        self.remove_restrictions_button = tk.Button(root, text="Снять ограничения на пароль", command=self.remove_restrictions)
+        self.remove_restrictions_button.pack()
+
+        self.exit_button = tk.Button(root, text="Выйти", command=self.logout)
         self.exit_button.pack()
 
     def change_password(self):
@@ -98,6 +121,11 @@ class AdminApp:
             new_password = simpledialog.askstring("Смена пароля", "Введите новый пароль:", show='*')
             confirm_password = simpledialog.askstring("Смена пароля", "Подтвердите новый пароль:", show='*')
             if new_password == confirm_password:
+                if self.user_data['ADMIN']['password_restrictions']:
+                    is_valid, message = validate_password(new_password, self.user_data['ADMIN']['password_restrictions'])
+                    if not is_valid:
+                        messagebox.showerror("Ошибка", message)
+                        return
                 self.user_data['ADMIN']['password'] = new_password
                 save_user_data(self.user_data)
                 messagebox.showinfo("Успех", "Пароль успешно изменен")
@@ -107,7 +135,7 @@ class AdminApp:
             messagebox.showerror("Ошибка", "Неверный старый пароль")
 
     def view_users(self):
-        users_info = "\n".join([f"Пользователь: {user}, Блокирован: {info['blocked']}, Ограничения на пароль: {info['password_restrictions']}" for user, info in self.user_data.items()])
+        users_info = "\n".join([f"Пользователь: {user}, Блокирован: {info['blocked']}, Ограничения: {info['password_restrictions']}" for user, info in self.user_data.items()])
         messagebox.showinfo("Список пользователей", users_info)
 
     def add_user(self):
@@ -115,7 +143,7 @@ class AdminApp:
         if new_user in self.user_data:
             messagebox.showerror("Ошибка", "Пользователь уже существует")
         else:
-            self.user_data[new_user] = {'password': '', 'blocked': False, 'password_restrictions': False}
+            self.user_data[new_user] = {'password': '', 'blocked': False, 'password_restrictions': None}
             save_user_data(self.user_data)
             messagebox.showinfo("Успех", "Пользователь добавлен")
 
@@ -137,14 +165,38 @@ class AdminApp:
         else:
             messagebox.showerror("Ошибка", "Пользователь не найден")
 
-    def toggle_restrictions(self):
-        user_to_toggle = simpledialog.askstring("Ограничения на пароль", "Введите имя пользователя для изменения ограничений на пароль:")
-        if user_to_toggle in self.user_data:
-            self.user_data[user_to_toggle]['password_restrictions'] = not self.user_data[user_to_toggle]['password_restrictions']
+    def set_restrictions(self):
+        user_to_set = simpledialog.askstring("Задать ограничения", "Введите имя пользователя:")
+        if user_to_set in self.user_data:
+            restrictions = {}
+            min_length = simpledialog.askinteger("Ограничения", "Минимальная длина пароля:", initialvalue=8)
+            if min_length is None:  
+                min_length = 0
+            restrictions['min_length'] = min_length
+            restrictions['uppercase'] = messagebox.askyesno("Ограничения", "Требовать заглавные буквы?")
+            restrictions['lowercase'] = messagebox.askyesno("Ограничения", "Требовать строчные буквы?")
+            restrictions['digits'] = messagebox.askyesno("Ограничения", "Требовать цифры?")
+            restrictions['special_chars'] = messagebox.askyesno("Ограничения", "Требовать специальные символы?")
+            self.user_data[user_to_set]['password_restrictions'] = restrictions
             save_user_data(self.user_data)
-            messagebox.showinfo("Успех", "Ограничения на пароль изменены")
+            messagebox.showinfo("Успех", f"Ограничения для пользователя {user_to_set} заданы: {restrictions}")
         else:
             messagebox.showerror("Ошибка", "Пользователь не найден")
+
+    def remove_restrictions(self):
+        user_to_remove = simpledialog.askstring("Снять ограничения", "Введите имя пользователя:")
+        if user_to_remove in self.user_data:
+            self.user_data[user_to_remove]['password_restrictions'] = None
+            save_user_data(self.user_data)
+            messagebox.showinfo("Успех", f"Ограничения для пользователя {user_to_remove} сняты.")
+        else:
+            messagebox.showerror("Ошибка", "Пользователь не найден")
+
+    def logout(self):
+        self.root.destroy()
+        root = tk.Tk()
+        app = LoginApp(root)
+        root.mainloop()
 
 class UserApp:
     def __init__(self, root, username, user_data):
@@ -156,7 +208,7 @@ class UserApp:
         self.change_password_button = tk.Button(root, text="Сменить пароль", command=self.change_password)
         self.change_password_button.pack()
 
-        self.exit_button = tk.Button(root, text="Завершить работу", command=root.quit)
+        self.exit_button = tk.Button(root, text="Выйти", command=self.logout)
         self.exit_button.pack()
 
     def change_password(self):
@@ -165,9 +217,11 @@ class UserApp:
             new_password = simpledialog.askstring("Смена пароля", "Введите новый пароль:", show='*')
             confirm_password = simpledialog.askstring("Смена пароля", "Подтвердите новый пароль:", show='*')
             if new_password == confirm_password:
-                if self.user_data[self.username]['password_restrictions'] and not validate_password(new_password):
-                    messagebox.showerror("Ошибка", "Пароль не соответствует требованиям")
-                    return
+                if self.user_data[self.username]['password_restrictions']:
+                    is_valid, message = validate_password(new_password, self.user_data[self.username]['password_restrictions'])
+                    if not is_valid:
+                        messagebox.showerror("Ошибка", message)
+                        return
                 self.user_data[self.username]['password'] = new_password
                 save_user_data(self.user_data)
                 messagebox.showinfo("Успех", "Пароль успешно изменен")
@@ -175,6 +229,12 @@ class UserApp:
                 messagebox.showerror("Ошибка", "Пароли не совпадают")
         else:
             messagebox.showerror("Ошибка", "Неверный старый пароль")
+
+    def logout(self):
+        self.root.destroy()
+        root = tk.Tk()
+        app = LoginApp(root)
+        root.mainloop()
 
 if __name__ == "__main__":
     root = tk.Tk()
