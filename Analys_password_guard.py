@@ -5,6 +5,7 @@ import os
 import time
 import itertools
 import string
+import math
 
 USER_DATA_FILE = 'user_data.json'
 
@@ -19,14 +20,72 @@ def save_user_data(data):
     with open(USER_DATA_FILE, 'w') as file:
         json.dump(data, file, indent=4)
 
+def validate_password(password, restrictions):
+    if restrictions:
+        min_length = restrictions.get('min_length', 0)
+        if min_length is None:
+            min_length = 0
+        if 'min_length' in restrictions and len(password) < min_length:
+            return False, f"Пароль должен быть не менее {min_length} символов."
+        if 'uppercase' in restrictions and restrictions['uppercase'] and not any(c.isupper() for c in password):
+            return False, "Пароль должен содержать хотя бы одну заглавную букву."
+        if 'lowercase' in restrictions and restrictions['lowercase'] and not any(c.islower() for c in password):
+            return False, "Пароль должен содержать хотя бы одну строчную букву."
+        if 'digits' in restrictions and restrictions['digits'] and not any(c.isdigit() for c in password):
+            return False, "Пароль должен содержать хотя бы одну цифру."
+        if 'special_chars' in restrictions and restrictions['special_chars'] and not any(c in r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~""" for c in password):
+            return False, "Пароль должен содержать хотя бы один специальный символ."
+    return True, "Пароль соответствует требованиям."
+
+def get_alphabet_power(password):
+    alphabet = 0
+
+    if any('а' <= c <= 'я' for c in password):
+        alphabet += 26
+    if any('А' <= c <= 'Я' for c in password):
+        alphabet += 26
+    if any('a' <= c <= 'z' for c in password):
+        alphabet += 33
+    if any('A' <= c <= 'Z' for c in password):
+        alphabet += 33
+    if any(c.isdigit() for c in password):
+        alphabet += 10
+    if any(c in string.punctuation for c in password):
+        alphabet += len(string.punctuation)
+    return alphabet
+
+def calculate(password, s):
+    N = get_alphabet_power(password)
+    L = len(password)
+    M = N ** L
+
+    base_time = M / s
+    total_time = base_time
+
+    print(f'Мощность алфавита: {N}')
+    print(f'Количество комбинаций: {M}')
+    return total_time
+
+def format_time(seconds):
+    years = seconds // (365 * 24 * 3600)
+    seconds %= (365 * 24 * 3600)
+    months = seconds // (30 * 24 * 3600)
+    seconds %= (30 * 24 * 3600)
+    days = seconds // (24 * 3600)
+    seconds %= (24 * 3600)
+    hours = seconds // 3600
+    seconds %= 3600
+    minutes = seconds // 60
+    seconds %= 60
+    return f"{int(years)} лет {int(months)} месяцев {int(days)} дней {int(hours)} часов {int(minutes)} минут {int(seconds)} секунд"
+
 class LoginApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Вход в систему")
         self.root.geometry("300x250")
         self.user_data = load_user_data()
-        self.is_brute_forcing = False  # Флаг для остановки перебора
-        self.start_time = None  # Время начала перебора
+        self.attempts = 0
 
         self.username_label = tk.Label(root, text="Имя пользователя:")
         self.username_label.pack()
@@ -44,122 +103,69 @@ class LoginApp:
         self.brute_force_button = tk.Button(root, text="Подобрать пароль", command=self.brute_force_password)
         self.brute_force_button.pack()
 
-        self.stop_button = tk.Button(root, text="Остановить перебор", command=self.stop_brute_force)
-        self.stop_button.pack()
-        self.stop_button.config(state=tk.DISABLED)  # Кнопка изначально неактивна
-
     def login(self):
         username = self.username_entry.get()
         password = self.password_entry.get()
 
         if username not in self.user_data:
-            self.show_error("Пользователь не найден")
+            messagebox.showerror("Ошибка", "Пользователь не найден")
             return
 
         if self.user_data[username]['blocked']:
-            self.show_error("Ваш аккаунт заблокирован")
+            messagebox.showerror("Ошибка", "Ваш аккаунт заблокирован")
             return
 
-        if self.user_data[username]['password'] == password:
-            self.show_success(f"Успешный вход! Пароль: {password}")
-            self.stop_brute_force()  # Останавливаем перебор, если пароль найден
-            self.root.destroy()
-            if username == 'ADMIN':
-                admin_root = tk.Tk()
-                admin_root.geometry("400x300")
-                AdminApp(admin_root, self.user_data)
+        if self.user_data[username]['password'] != password:
+            self.attempts += 1
+            if self.attempts >= 3:
+                messagebox.showerror("Ошибка", "Превышено количество попыток")
+                self.root.quit()
             else:
-                user_root = tk.Tk()
-                user_root.geometry("200x100")
-                UserApp(user_root, username, self.user_data)
+                messagebox.showerror("Ошибка", f"Неверный пароль. Осталось попыток: {3 - self.attempts}")
+            return
+
+        self.root.destroy()
+        if username == 'ADMIN':
+            admin_root = tk.Tk()
+            admin_root.geometry("400x300")
+            AdminApp(admin_root, self.user_data)
         else:
-            self.show_error("Неверный пароль. Попробуйте еще раз.")
-            self.password_entry.delete(0, tk.END)  # Очищаем поле ввода пароля
+            user_root = tk.Tk()
+            user_root.geometry("200x100")
+            UserApp(user_root, username, self.user_data)
 
     def brute_force_password(self):
         username = self.username_entry.get()
         if username not in self.user_data:
-            self.show_error("Пользователь не найден")
+            messagebox.showerror("Ошибка", "Пользователь не найден")
             return
 
         if self.user_data[username]['blocked']:
-            self.show_error("Ваш аккаунт заблокирован")
+            messagebox.showerror("Ошибка", "Ваш аккаунт заблокирован")
             return
 
         method = simpledialog.askstring("Метод подбора", "Выберите метод подбора (dictionary/full):")
-        if method == "dictionary":
-            self.brute_force_with_dictionary(username)
-        elif method == "full":
-            self.brute_force_full(username)
-        else:
-            self.show_error("Неверный метод подбора")
-
-    def brute_force_with_dictionary(self, username):
-        dictionary = ["admin", "password", "123456", "qwerty", "1!!qqW"]
-        self.is_brute_forcing = True
-        self.start_time = time.time()  # Засекаем время начала перебора
-        self.stop_button.config(state=tk.NORMAL)  # Активируем кнопку остановки
-        self.brute_force_button.config(state=tk.DISABLED)  # Деактивируем кнопку подбора
-
-        for word in dictionary:
-            if not self.is_brute_forcing:
-                break
+        if method == "d":
+            dictionary = ["admin", "password", "123456", "qwerty", "1!!qqW"]
+            start_time = time.time()
+            for word in dictionary:
+                if word == self.user_data[username]['password']:
+                    elapsed_time = time.time() - start_time
+                    self.password_entry.delete(0, tk.END)
+                    self.password_entry.insert(0, word)
+                    messagebox.showinfo("Успех", f"Пароль подобран: {word}\nВремя подбора: {elapsed_time:.2f} секунд")
+                    return
+            messagebox.showerror("Ошибка", "Пароль не найден в словаре")
+        elif method == "f":
+            password = self.user_data[username]['password']
+            s = float(simpledialog.askstring("Скорость", "Введите скорость перебора паролей в секунду:"))
+            calculateTime = calculate(password, s)
+            formatted_time = format_time(calculateTime)
             self.password_entry.delete(0, tk.END)
-            self.password_entry.insert(0, word)
-            self.login()
-            self.root.update()  # Обновляем интерфейс
-            time.sleep(0.1)  # Задержка для наглядности
-
-        if self.is_brute_forcing:
-            elapsed_time = time.time() - self.start_time
-            self.show_error(f"Пароль не найден в словаре. Затраченное время: {elapsed_time:.2f} секунд")
-        self.stop_brute_force()
-
-    def brute_force_full(self, username):
-        alphabet = string.ascii_letters + string.digits + string.punctuation
-        self.is_brute_forcing = True
-        self.start_time = time.time()  # Засекаем время начала перебора
-        self.stop_button.config(state=tk.NORMAL)  # Активируем кнопку остановки
-        self.brute_force_button.config(state=tk.DISABLED)  # Деактивируем кнопку подбора
-
-        password_length = 1  # Начинаем с длины 1
-        while self.is_brute_forcing:
-            for password in itertools.product(alphabet, repeat=password_length):
-                if not self.is_brute_forcing:
-                    break
-                password = ''.join(password)
-                self.password_entry.delete(0, tk.END)
-                self.password_entry.insert(0, password)
-                self.login()
-                self.root.update()  # Обновляем интерфейс
-                time.sleep(0.1)  # Задержка для наглядности
-            password_length += 1  # Увеличиваем длину пароля
-
-        if self.is_brute_forcing:
-            elapsed_time = time.time() - self.start_time
-            self.show_error(f"Пароль не найден. Затраченное время: {elapsed_time:.2f} секунд")
-        self.stop_brute_force()
-
-    def stop_brute_force(self):
-        self.is_brute_forcing = False
-        self.stop_button.config(state=tk.DISABLED)  # Деактивируем кнопку остановки
-        self.brute_force_button.config(state=tk.NORMAL)  # Активируем кнопку подбора
-
-    def show_error(self, message):
-        if hasattr(self, 'error_label'):
-            self.error_label.config(text=message, fg="red")
+            self.password_entry.insert(0, password)
+            messagebox.showinfo("Оценочное время", f"Оценочное время перебора пароля: {formatted_time}\nНайденный пароль: {password}")
         else:
-            self.error_label = tk.Label(self.root, text=message, fg="red")
-            self.error_label.pack()
-
-    def show_success(self, message):
-        if hasattr(self, 'error_label'):
-            self.error_label.config(text=message, fg="green")
-        else:
-            self.error_label = tk.Label(self.root, text=message, fg="green")
-            self.error_label.pack()
-        elapsed_time = time.time() - self.start_time
-        messagebox.showinfo("Успех", f"{message}\nЗатраченное время: {elapsed_time:.2f} секунд")
+            messagebox.showerror("Ошибка", "Неверный метод подбора")
 
 class AdminApp:
     def __init__(self, root, user_data):
@@ -197,6 +203,11 @@ class AdminApp:
             new_password = simpledialog.askstring("Смена пароля", "Введите новый пароль:", show='*')
             confirm_password = simpledialog.askstring("Смена пароля", "Подтвердите новый пароль:", show='*')
             if new_password == confirm_password:
+                if self.user_data['ADMIN']['password_restrictions']:
+                    is_valid, message = validate_password(new_password, self.user_data['ADMIN']['password_restrictions'])
+                    if not is_valid:
+                        messagebox.showerror("Ошибка", message)
+                        return
                 self.user_data['ADMIN']['password'] = new_password
                 save_user_data(self.user_data)
                 messagebox.showinfo("Успех", "Пароль успешно изменен")
@@ -206,7 +217,7 @@ class AdminApp:
             messagebox.showerror("Ошибка", "Неверный старый пароль")
 
     def view_users(self):
-        users_info = "\n".join([f"Пользователь: {user}, Блокирован: {info['blocked']}" for user, info in self.user_data.items()])
+        users_info = "\n".join([f"Пользователь: {user}, Блокирован: {info['blocked']}, Ограничения: {info['password_restrictions']}" for user, info in self.user_data.items()])
         messagebox.showinfo("Список пользователей", users_info)
 
     def add_user(self):
@@ -288,6 +299,11 @@ class UserApp:
             new_password = simpledialog.askstring("Смена пароля", "Введите новый пароль:", show='*')
             confirm_password = simpledialog.askstring("Смена пароля", "Подтвердите новый пароль:", show='*')
             if new_password == confirm_password:
+                if self.user_data[self.username]['password_restrictions']:
+                    is_valid, message = validate_password(new_password, self.user_data[self.username]['password_restrictions'])
+                    if not is_valid:
+                        messagebox.showerror("Ошибка", message)
+                        return
                 self.user_data[self.username]['password'] = new_password
                 save_user_data(self.user_data)
                 messagebox.showinfo("Успех", "Пароль успешно изменен")
